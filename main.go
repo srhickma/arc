@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 func main() {
@@ -17,27 +18,47 @@ func main() {
 		fmt.Println(arg)
 	}
 
-	err := filepath.WalkDir("/mnt/vat/photos", func(path string, entry fs.DirEntry, err error) error {
+	goroutines := 8
+
+	wg := sync.WaitGroup{}
+	pathChan := make(chan string, goroutines)
+
+	for range goroutines {
+		wg.Go(func() {
+			for {
+				path, ok := <-pathChan
+				if !ok {
+					break
+				}
+
+				file, err := os.Open(path)
+				if err != nil {
+					log.Fatal(err)
+				}
+				defer file.Close()
+
+				hash := sha256.New()
+				if _, err := io.Copy(hash, file); err != nil {
+					log.Fatal(err)
+				}
+				fmt.Printf("%s - %s\n", hex.EncodeToString(hash.Sum(nil)), path)
+			}
+		})
+	}
+
+	err := filepath.WalkDir("/Users/shane/vat/photos", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if !entry.IsDir() {
-			file, err := os.Open(path)
-			if err != nil {
-				return err
-			}
-			defer file.Close()
-
-			hash := sha256.New()
-			if _, err := io.Copy(hash, file); err != nil {
-				return err
-			}
-
-			fmt.Printf("%s - %s\n", path, hex.EncodeToString(hash.Sum(nil)))
+			pathChan <- path
 		}
 		return nil
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	close(pathChan)
+	wg.Wait()
 }
