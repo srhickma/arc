@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/md5"
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -31,6 +33,10 @@ func newHasher(hashType string) (*hasher, error) {
 	switch hashType {
 	case "sha256":
 		hashFactory = sha256.New
+	case "sha1":
+		hashFactory = sha1.New
+	case "md5":
+		hashFactory = md5.New
 	default:
 		return nil, fmt.Errorf("unsupported hash type %s", hashType)
 	}
@@ -92,7 +98,7 @@ func main() {
 		})
 	}
 
-	err = filepath.WalkDir("/Users/shane/vat/photos", func(path string, entry fs.DirEntry, err error) error {
+	err = filepath.WalkDir("/mnt/vat/photos", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
