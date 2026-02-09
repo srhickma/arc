@@ -15,13 +15,10 @@ import (
 	"sync"
 )
 
-type IntegrityFile struct {
+type Config struct {
 	hashType string
-	files    map[string]FileData
-}
-
-type FileData struct {
-	checksum string
+	folder   string
+	workers  int
 }
 
 type hasher struct {
@@ -72,16 +69,21 @@ func main() {
 		fmt.Println(arg)
 	}
 
-	hasher, err := newHasher("sha256")
+	config := &Config{
+		hashType: "sha256",
+		folder:   "/mnt/vat/photos",
+		workers:  8,
+	}
+
+	hasher, err := newHasher(config.hashType)
 	if err != nil {
 		log.Fatal(err)
 	}
-	goroutines := 8
 
 	wg := sync.WaitGroup{}
-	fhChan := make(chan fileHandle, goroutines)
+	fhChan := make(chan fileHandle, config.workers)
 
-	for range goroutines {
+	for range config.workers {
 		wg.Go(func() {
 			for {
 				fh, ok := <-fhChan
@@ -98,7 +100,7 @@ func main() {
 		})
 	}
 
-	err = filepath.WalkDir("/mnt/vat/photos", func(path string, entry fs.DirEntry, err error) error {
+	err = filepath.WalkDir(config.folder, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
