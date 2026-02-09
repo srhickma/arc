@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"hash"
 	"io"
 	"io/fs"
 	"log"
@@ -12,53 +13,109 @@ import (
 	"sync"
 )
 
+type IntegrityFile struct {
+	hashType string
+	files    map[string]FileData
+}
+
+type FileData struct {
+	checksum string
+}
+
+type hasher struct {
+	hashFactory func() hash.Hash
+}
+
+func newHasher(hashType string) (*hasher, error) {
+	var hashFactory func() hash.Hash
+	switch hashType {
+	case "sha256":
+		hashFactory = sha256.New
+	default:
+		return nil, fmt.Errorf("unsupported hash type %s", hashType)
+	}
+
+	return &hasher{
+		hashFactory: hashFactory,
+	}, nil
+}
+
+func (h *hasher) computeChecksum(filePath string) (string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", fmt.Errorf("error opening %s: %w", filePath, err)
+	}
+	defer file.Close()
+
+	hash := h.hashFactory()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", fmt.Errorf("error reading %s: %w", filePath, err)
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+type fileHandle struct {
+	path string
+	name string
+	info fs.FileInfo
+}
+
 func main() {
 	args := os.Args[1:]
 	for _, arg := range args {
 		fmt.Println(arg)
 	}
 
+	hasher, err := newHasher("sha256")
+	if err != nil {
+		log.Fatal(err)
+	}
 	goroutines := 8
 
 	wg := sync.WaitGroup{}
-	pathChan := make(chan string, goroutines)
+	fhChan := make(chan fileHandle, goroutines)
 
 	for range goroutines {
 		wg.Go(func() {
 			for {
-				path, ok := <-pathChan
+				fh, ok := <-fhChan
 				if !ok {
 					break
 				}
 
-				file, err := os.Open(path)
+				checksum, err := hasher.computeChecksum(fh.path)
 				if err != nil {
-					log.Fatal(err)
+					log.Fatal(err) // TODO propagate the error instead
 				}
-				defer file.Close()
-
-				hash := sha256.New()
-				if _, err := io.Copy(hash, file); err != nil {
-					log.Fatal(err)
-				}
-				fmt.Printf("%s - %s\n", hex.EncodeToString(hash.Sum(nil)), path)
+				fmt.Printf("%s - %s\n", checksum, fh.path)
 			}
 		})
 	}
 
-	err := filepath.WalkDir("/Users/shane/vat/photos", func(path string, entry fs.DirEntry, err error) error {
+	err = filepath.WalkDir("/Users/shane/vat/photos", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
+
 		if !entry.IsDir() {
-			pathChan <- path
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+
+			fhChan <- fileHandle{
+				path: path,
+				name: entry.Name(),
+				info: info,
+			}
 		}
+
 		return nil
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	close(pathChan)
+	close(fhChan)
 	wg.Wait()
 }
