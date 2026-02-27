@@ -172,30 +172,31 @@ func main() {
 		time.Since(startTime).Round(time.Millisecond),
 	)
 
-	changed := false
+	var added, removed, modified int
 	for path, info := range newSums {
 		prev, ok := oldSums[path]
 		if !ok {
 			fmt.Printf("ADDED: %s\n", path)
-			changed = true
+			added++
 		} else if prev.Checksum != info.Checksum {
-			fmt.Printf("CHANGED: %s\n", path)
-			changed = true
+			fmt.Printf("MODIFIED: %s\n", path)
+			modified++
 		}
 	}
 
 	for path := range oldSums {
 		if _, ok := newSums[path]; !ok {
 			fmt.Printf("REMOVED: %s\n", path)
-			changed = true
+			removed++
 		}
 	}
 
-	if !changed {
+	if added+removed+modified == 0 {
 		fmt.Println("no changes detected")
 		return
 	}
 
+	fmt.Printf("%d added, %d removed, %d modified\n", added, removed, modified)
 	fmt.Printf("write new checksums to %s? [y/N]: ", sumFile)
 	var response string
 	fmt.Scanln(&response)
