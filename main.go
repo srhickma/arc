@@ -172,31 +172,86 @@ func main() {
 		time.Since(startTime).Round(time.Millisecond),
 	)
 
-	var added, removed, modified int
-	for path, info := range newSums {
-		prev, ok := oldSums[path]
-		if !ok {
-			fmt.Printf("ADDED: %s\n", path)
-			added++
-		} else if prev.Checksum != info.Checksum {
-			fmt.Printf("MODIFIED: %s\n", path)
-			modified++
-		}
+	// Mapping of old checksums to file paths
+	oldSumsReverse := make(map[string][]string, len(oldSums))
+	for path, info := range oldSums {
+		oldSumsReverse[info.Checksum] = append(oldSumsReverse[info.Checksum], path)
 	}
 
-	for path := range oldSums {
+	type addInfo struct{ checksum string }
+	type remInfo struct{ checksum string }
+	type modInfo struct{ oldChecksum, newChecksum string }
+	type moveInfo struct{ from, to string }
+
+	addedFiles := make(map[string]addInfo)
+	removedFiles := make(map[string]remInfo)
+	modifiedFiles := make(map[string]modInfo)
+	var movedFiles []moveInfo
+
+	for path, newInfo := range newSums {
+		if oldInfo, ok := oldSums[path]; !ok {
+			addedFiles[path] = addInfo{checksum: newInfo.Checksum}
+		} else if oldInfo.Checksum != newInfo.Checksum {
+			// Treat modified files like an add + remove for better tracking of moved files.
+			// For example, if two files swap paths we want to treat that as two moves rather
+			// than two modifications.
+			addedFiles[path] = addInfo{checksum: newInfo.Checksum}
+			removedFiles[path] = remInfo{checksum: oldInfo.Checksum}
+			modifiedFiles[path] = modInfo{
+				oldChecksum: oldInfo.Checksum,
+				newChecksum: newInfo.Checksum,
+			}
+		}
+	}
+	for path, info := range oldSums {
 		if _, ok := newSums[path]; !ok {
-			fmt.Printf("REMOVED: %s\n", path)
-			removed++
+			removedFiles[path] = remInfo{checksum: info.Checksum}
 		}
 	}
 
-	if added+removed+modified == 0 {
+	// If a file was added with the same checksum as a file that was removed, treat it
+	// as a moved file
+	for addedPath, addInfo := range addedFiles {
+		for _, oldPath := range oldSumsReverse[addInfo.checksum] {
+			if _, wasRemoved := removedFiles[oldPath]; wasRemoved {
+				movedFiles = append(movedFiles, moveInfo{
+					from: oldPath,
+					to:   addedPath,
+				})
+				delete(addedFiles, addedPath)
+				delete(removedFiles, oldPath)
+				delete(modifiedFiles, oldPath)
+			}
+		}
+	}
+
+	// For any modified files that remain after handling moves, make sure we delete
+	// the extra add + remove to avoid duplicate reporting.
+	for path := range modifiedFiles {
+		delete(addedFiles, path)
+		delete(removedFiles, path)
+	}
+
+	for path, info := range addedFiles {
+		fmt.Printf("   ADDED: %s - %s\n", path, info.checksum)
+	}
+	for _, info := range movedFiles {
+		fmt.Printf("   MOVED: %s -> %s\n", info.from, info.to)
+	}
+	for path, info := range removedFiles {
+		fmt.Printf(" REMOVED: %s - %s\n", path, info.checksum)
+	}
+	for path, info := range modifiedFiles {
+		fmt.Printf("MODIFIED: %s - %s -> %s\n", path, info.oldChecksum, info.newChecksum)
+	}
+
+	if len(addedFiles)+len(movedFiles)+len(removedFiles)+len(modifiedFiles) == 0 {
 		fmt.Println("no changes detected")
 		return
 	}
 
-	fmt.Printf("%d added, %d removed, %d modified\n", added, removed, modified)
+	fmt.Printf("%d added, %d moved, %d removed, %d modified\n",
+		len(addedFiles), len(movedFiles), len(removedFiles), len(modifiedFiles))
 	fmt.Printf("write new checksums to %s? [y/N]: ", sumFile)
 	var response string
 	fmt.Scanln(&response)
