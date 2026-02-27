@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -24,7 +25,6 @@ const (
 
 type Config struct {
 	HashType string `json:"hashType"`
-	Folder   string `json:"folder"`
 	Workers  int    `json:"workers"`
 }
 
@@ -75,13 +75,34 @@ type fileInfo struct {
 	ModTime  time.Time `json:"modTime"`
 }
 
-func main() {
-	args := os.Args[1:]
-	for _, arg := range args {
-		fmt.Println(arg)
+func resolvePath(path string) (string, error) {
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		path = filepath.Join(home, path[2:])
 	}
 
-	configData, err := os.ReadFile(confFile)
+	return filepath.Abs(path)
+}
+
+func main() {
+	args := os.Args[1:]
+	if len(args) < 1 {
+		log.Fatal("usage: arc <dir>")
+	}
+
+	targetDir, err := resolvePath(args[0])
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	configPath := filepath.Join(targetDir, confFile)
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		log.Fatalf("config file not found: %s", configPath)
+	}
+	configData, err := os.ReadFile(configPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -91,7 +112,7 @@ func main() {
 	}
 
 	oldSums := make(map[string]fileInfo)
-	sumPath := filepath.Join(config.Folder, sumFile)
+	sumPath := filepath.Join(targetDir, sumFile)
 	if bytes, err := os.ReadFile(sumPath); err == nil {
 		if err := json.Unmarshal(bytes, &oldSums); err != nil {
 			log.Fatal(err)
@@ -136,12 +157,12 @@ func main() {
 		})
 	}
 
-	err = filepath.WalkDir(config.Folder, func(path string, entry fs.DirEntry, err error) error {
+	err = filepath.WalkDir(targetDir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if entry.IsDir() || entry.Name() == sumFile {
+		if entry.IsDir() || entry.Name() == sumFile || entry.Name() == confFile {
 			return nil
 		}
 
