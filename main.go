@@ -84,7 +84,6 @@ func resolvePath(path string) (string, error) {
 		path = filepath.Join(home, path[2:])
 	}
 
-	// Handles ".", "./subpath", and other relative paths
 	return filepath.Abs(path)
 }
 
