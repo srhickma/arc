@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -23,9 +24,33 @@ const (
 	confFile = "arc.conf"
 )
 
+type RawConfig struct {
+	HashType string   `json:"hashType"`
+	Workers  int      `json:"workers"`
+	Ignore   []string `json:"ignore"`
+}
+
+func (c *RawConfig) Process() (*Config, error) {
+	var ignorePatterns []*regexp.Regexp
+	for _, pattern := range c.Ignore {
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ignore pattern %q: %w", pattern, err)
+		}
+		ignorePatterns = append(ignorePatterns, re)
+	}
+
+	return &Config{
+		HashType:       c.HashType,
+		Workers:        c.Workers,
+		IgnorePatterns: ignorePatterns,
+	}, nil
+}
+
 type Config struct {
-	HashType string `json:"hashType"`
-	Workers  int    `json:"workers"`
+	HashType       string
+	Workers        int
+	IgnorePatterns []*regexp.Regexp
 }
 
 type hasher struct {
@@ -131,8 +156,32 @@ func computeChecksums(targetDir string, config *Config, oldSums map[string]fileI
 			return err
 		}
 
-		if entry.IsDir() || entry.Name() == sumFile || entry.Name() == confFile {
+		// Compute path relative to target directory for ignore pattern comparison
+		pathInTarget := strings.TrimPrefix(strings.TrimPrefix(path, targetDir), string(filepath.Separator))
+
+		if entry.IsDir() {
+			// Add a trailing separator to the directory path so that we can use it to efficently target
+			// directories with ignore patterns. Without this, either we have to use a more general pattern
+			// which could also match files, or we will unecessarily walk the ignored directory before
+			// filtering out its contents.
+			pathInTarget += string(filepath.Separator)
+
+			for _, pattern := range config.IgnorePatterns {
+				if pattern.MatchString(pathInTarget) {
+					return fs.SkipDir
+				}
+			}
 			return nil
+		}
+
+		if pathInTarget == sumFile || pathInTarget == confFile {
+			return nil
+		}
+
+		for _, pattern := range config.IgnorePatterns {
+			if pattern.MatchString(pathInTarget) {
+				return nil
+			}
 		}
 
 		info, err := entry.Info()
@@ -274,8 +323,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	var config Config
-	if err := json.Unmarshal(configData, &config); err != nil {
+	var rawConfig RawConfig
+	if err := json.Unmarshal(configData, &rawConfig); err != nil {
+		log.Fatal(err)
+	}
+	config, err := rawConfig.Process()
+	if err != nil {
 		log.Fatal(err)
 	}
 
@@ -295,7 +348,7 @@ func main() {
 
 	startTime := time.Now()
 
-	newSums, numChecksums, totalBytes, err := computeChecksums(targetDir, &config, oldSums, deep)
+	newSums, numChecksums, totalBytes, err := computeChecksums(targetDir, config, oldSums, deep)
 	if err != nil {
 		log.Fatal(err)
 	}
