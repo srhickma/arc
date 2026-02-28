@@ -163,7 +163,7 @@ func computeChecksums(targetDir string, config *Config, oldSums map[string]fileI
 			// Add a trailing separator to the directory path so that we can use it to efficently target
 			// directories with ignore patterns. Without this, either we have to use a more general pattern
 			// which could also match files, or we will unecessarily walk the ignored directory before
-			// filtering out it's contents.
+			// filtering out its contents.
 			pathInTarget += string(filepath.Separator)
 
 			for _, pattern := range config.IgnorePatterns {
@@ -174,7 +174,7 @@ func computeChecksums(targetDir string, config *Config, oldSums map[string]fileI
 			return nil
 		}
 
-		if entry.Name() == sumFile || entry.Name() == confFile {
+		if pathInTarget == sumFile || pathInTarget == confFile {
 			return nil
 		}
 
