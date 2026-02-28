@@ -81,19 +81,16 @@ func resolvePath(path string) (string, error) {
 	return filepath.Abs(path)
 }
 
-func computeChecksums(
-	targetDir string,
-	config *Config,
-	oldSums map[string]fileInfo,
-	deep bool,
-) (sums map[string]fileInfo, numChecksums int, totalBytes int64, err error) {
+func computeChecksums(targetDir string, config *Config, oldSums map[string]fileInfo, deep bool) (map[string]fileInfo, int, int64, error) {
 	hasher, err := newHasher(config.HashType)
 	if err != nil {
 		return nil, 0, 0, err
 	}
 
 	var lock sync.Mutex
-	sums = make(map[string]fileInfo)
+	sums := make(map[string]fileInfo)
+	var numChecksums int
+	var totalBytes int64
 
 	type fileHandle struct {
 		path string
@@ -164,7 +161,7 @@ func computeChecksums(
 	close(fhChan)
 	wg.Wait()
 
-	return
+	return sums, numChecksums, totalBytes, nil
 }
 
 type addInfo struct{ checksum string }
