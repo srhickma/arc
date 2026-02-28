@@ -301,7 +301,7 @@ func main() {
 	}
 
 	fmt.Printf(
-		"finished comparison of %d file(s) in %s; %d checksum(s) calculated over %.2fMB\n",
+		"finished checking %d file(s) in %s; %d checksum(s) calculated over %.2fMB\n",
 		len(newSums),
 		time.Since(startTime).Round(time.Millisecond),
 		numChecksums,
