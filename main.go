@@ -81,15 +81,19 @@ func resolvePath(path string) (string, error) {
 	return filepath.Abs(path)
 }
 
-func computeChecksums(targetDir string, config *Config) (map[string]fileInfo, int64, error) {
+func computeChecksums(
+	targetDir string,
+	config *Config,
+	oldSums map[string]fileInfo,
+	deep bool,
+) (sums map[string]fileInfo, numChecksums int, totalBytes int64, err error) {
 	hasher, err := newHasher(config.HashType)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 
 	var lock sync.Mutex
-	sums := make(map[string]fileInfo)
-	var totalBytes int64
+	sums = make(map[string]fileInfo)
 
 	type fileHandle struct {
 		path string
@@ -118,6 +122,7 @@ func computeChecksums(targetDir string, config *Config) (map[string]fileInfo, in
 					Checksum: checksum,
 					ModTime:  fh.info.ModTime(),
 				}
+				numChecksums++
 				totalBytes += fh.info.Size()
 				lock.Unlock()
 			}
@@ -138,6 +143,15 @@ func computeChecksums(targetDir string, config *Config) (map[string]fileInfo, in
 			return err
 		}
 
+		if !deep {
+			if old, ok := oldSums[path]; ok && !old.ModTime.IsZero() && old.ModTime.Equal(info.ModTime()) {
+				lock.Lock()
+				sums[path] = old
+				lock.Unlock()
+				return nil
+			}
+		}
+
 		fhChan <- fileHandle{
 			path: path,
 			name: entry.Name(),
@@ -150,7 +164,7 @@ func computeChecksums(targetDir string, config *Config) (map[string]fileInfo, in
 	close(fhChan)
 	wg.Wait()
 
-	return sums, totalBytes, err
+	return
 }
 
 type addInfo struct{ checksum string }
@@ -235,11 +249,22 @@ func computeDiff(oldSums, newSums map[string]fileInfo) *diffResult {
 
 func main() {
 	args := os.Args[1:]
-	if len(args) < 1 {
-		log.Fatal("usage: arc <dir>")
+
+	deep := false
+	var posArgs []string
+	for _, arg := range args {
+		if arg == "--deep" {
+			deep = true
+		} else {
+			posArgs = append(posArgs, arg)
+		}
 	}
 
-	targetDir, err := resolvePath(args[0])
+	if len(posArgs) < 1 {
+		log.Fatal("usage: arc <dir> [--deep]")
+	}
+
+	targetDir, err := resolvePath(posArgs[0])
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -265,18 +290,25 @@ func main() {
 		}
 	}
 
+	if deep {
+		fmt.Println("starting deep check (all files) ...")
+	} else {
+		fmt.Println("starting shallow check (modified files) ...")
+	}
+
 	startTime := time.Now()
 
-	newSums, totalBytes, err := computeChecksums(targetDir, &config)
+	newSums, numChecksums, totalBytes, err := computeChecksums(targetDir, &config, oldSums, deep)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	fmt.Printf(
-		"computed %d checksums over %.2fMB in %s\n",
+		"finished comparison of %d file(s) in %s; %d checksum(s) calculated over %.2fMB\n",
 		len(newSums),
-		float64(totalBytes)/(1024*1024),
 		time.Since(startTime).Round(time.Millisecond),
+		numChecksums,
+		float64(totalBytes)/(1024*1024),
 	)
 
 	diff := computeDiff(oldSums, newSums)
