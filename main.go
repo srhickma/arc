@@ -213,10 +213,14 @@ func computeChecksums(targetDir string, config *Config, oldSums map[string]fileI
 	return sums, numChecksums, totalBytes, nil
 }
 
+func colored(text, color string) string {
+	return color + text + "\033[0m"
+}
+
 func coloredCount[T any](slice []T, label, color string) string {
 	text := fmt.Sprintf("%d %s", len(slice), label)
 	if len(slice) > 0 {
-		return color + text + "\033[0m"
+		return colored(text, color)
 	}
 	return text
 }
@@ -295,19 +299,19 @@ func main() {
 		colorGreen  = "\033[32m"
 		colorYellow = "\033[33m"
 		colorRed    = "\033[31m"
-		colorReset  = "\033[0m"
 	)
+
 	for _, added := range diff.AddedFiles {
-		fmt.Printf("%s   ADDED:%s %s\n", colorGreen, colorReset, added.Path)
+		fmt.Printf("   %s %s\n", colored("ADDED:", colorGreen), added.Path)
 	}
 	for _, moved := range diff.MovedFiles {
-		fmt.Printf("%s   MOVED:%s %s -> %s\n", colorYellow, colorReset, moved.From, moved.To)
+		fmt.Printf("   %s %s -> %s\n", colored("MOVED:", colorYellow), moved.From, moved.To)
 	}
 	for _, removed := range diff.RemovedFiles {
-		fmt.Printf("%s REMOVED:%s %s\n", colorRed, colorReset, removed.Path)
+		fmt.Printf(" %s %s\n", colored("REMOVED:", colorRed), removed.Path)
 	}
 	for _, modified := range diff.ModifiedFiles {
-		fmt.Printf("%sMODIFIED:%s %s - %s -> %s\n", colorRed, colorReset, modified.Path, modified.OldChecksum, modified.NewChecksum)
+		fmt.Printf("%s %s - %s -> %s\n", colored("MODIFIED:", colorRed), modified.Path, modified.OldChecksum, modified.NewChecksum)
 	}
 
 	if diff.Empty() {
