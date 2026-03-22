@@ -283,20 +283,20 @@ func main() {
 
 	diff := computeDiff(oldSums, newSums)
 
-	for _, f := range diff.AddedFiles {
-		fmt.Printf("   ADDED: %s\n", f.Path)
+	for _, added := range diff.AddedFiles {
+		fmt.Printf("   ADDED: %s\n", added.Path)
 	}
-	for _, f := range diff.MovedFiles {
-		fmt.Printf("   MOVED: %s -> %s\n", f.From, f.To)
+	for _, moved := range diff.MovedFiles {
+		fmt.Printf("   MOVED: %s -> %s\n", moved.From, moved.To)
 	}
-	for _, f := range diff.RemovedFiles {
-		fmt.Printf(" REMOVED: %s\n", f.Path)
+	for _, removed := range diff.RemovedFiles {
+		fmt.Printf(" REMOVED: %s\n", removed.Path)
 	}
-	for _, f := range diff.ModifiedFiles {
-		fmt.Printf("MODIFIED: %s - %s -> %s\n", f.Path, f.OldChecksum, f.NewChecksum)
+	for _, modified := range diff.ModifiedFiles {
+		fmt.Printf("MODIFIED: %s - %s -> %s\n", modified.Path, modified.OldChecksum, modified.NewChecksum)
 	}
 
-	if diff.empty() {
+	if diff.Empty() {
 		fmt.Println("no changes detected")
 		return
 	}

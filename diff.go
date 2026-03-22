@@ -12,7 +12,7 @@ type DiffResult struct {
 	MovedFiles    []MovedFile
 }
 
-func (d *DiffResult) empty() bool {
+func (d *DiffResult) Empty() bool {
 	return len(d.AddedFiles)+len(d.RemovedFiles)+len(d.ModifiedFiles)+len(d.MovedFiles) == 0
 }
 
@@ -27,21 +27,21 @@ func computeDiff(oldSums, newSums map[string]fileInfo) *DiffResult {
 		oldSumsReverse[info.Checksum] = append(oldSumsReverse[info.Checksum], path)
 	}
 
-	addedFiles := make(map[string]addInfo)
-	removedFiles := make(map[string]remInfo)
-	modifiedFiles := make(map[string]modInfo)
-	var movedFiles []MovedFile
+	added := make(map[string]addInfo)
+	removed := make(map[string]remInfo)
+	modified := make(map[string]modInfo)
+	var moved []MovedFile
 
 	for path, newInfo := range newSums {
 		if oldInfo, ok := oldSums[path]; !ok {
-			addedFiles[path] = addInfo{checksum: newInfo.Checksum}
+			added[path] = addInfo{checksum: newInfo.Checksum}
 		} else if oldInfo.Checksum != newInfo.Checksum {
 			// Treat modified files like an add + remove for better tracking of moved files.
 			// For example, if two files swap paths we want to treat that as two moves rather
 			// than two modifications.
-			addedFiles[path] = addInfo{checksum: newInfo.Checksum}
-			removedFiles[path] = remInfo{checksum: oldInfo.Checksum}
-			modifiedFiles[path] = modInfo{
+			added[path] = addInfo{checksum: newInfo.Checksum}
+			removed[path] = remInfo{checksum: oldInfo.Checksum}
+			modified[path] = modInfo{
 				oldChecksum: oldInfo.Checksum,
 				newChecksum: newInfo.Checksum,
 			}
@@ -49,62 +49,62 @@ func computeDiff(oldSums, newSums map[string]fileInfo) *DiffResult {
 	}
 	for path, info := range oldSums {
 		if _, ok := newSums[path]; !ok {
-			removedFiles[path] = remInfo{checksum: info.Checksum}
+			removed[path] = remInfo{checksum: info.Checksum}
 		}
 	}
 
 	// If a file was added with the same checksum as a file that was removed, treat it
 	// as a moved file
-	for addedPath, addInfo := range addedFiles {
+	for addedPath, addInfo := range added {
 		for _, oldPath := range oldSumsReverse[addInfo.checksum] {
-			if _, wasRemoved := removedFiles[oldPath]; wasRemoved {
-				movedFiles = append(movedFiles, MovedFile{
+			if _, wasRemoved := removed[oldPath]; wasRemoved {
+				moved = append(moved, MovedFile{
 					From: oldPath,
 					To:   addedPath,
 				})
-				delete(addedFiles, addedPath)
-				delete(removedFiles, oldPath)
-				delete(modifiedFiles, oldPath)
+				delete(added, addedPath)
+				delete(removed, oldPath)
+				delete(modified, oldPath)
 			}
 		}
 	}
 
 	// For any modified files that remain after handling moves, make sure we delete
 	// the extra add + remove to avoid duplicate reporting.
-	for path := range modifiedFiles {
-		delete(addedFiles, path)
-		delete(removedFiles, path)
+	for path := range modified {
+		delete(added, path)
+		delete(removed, path)
 	}
 
-	added := make([]AddedFile, 0, len(addedFiles))
-	for path, info := range addedFiles {
-		added = append(added, AddedFile{Path: path, Checksum: info.checksum})
+	addedFiles := make([]AddedFile, 0, len(added))
+	for path, info := range added {
+		addedFiles = append(addedFiles, AddedFile{Path: path, Checksum: info.checksum})
 	}
-	slices.SortFunc(added, cmpFunc)
+	slices.SortFunc(addedFiles, cmpFunc)
 
-	removed := make([]RemovedFile, 0, len(removedFiles))
-	for path, info := range removedFiles {
-		removed = append(removed, RemovedFile{Path: path, Checksum: info.checksum})
+	removedFiles := make([]RemovedFile, 0, len(removed))
+	for path, info := range removed {
+		removedFiles = append(removedFiles, RemovedFile{Path: path, Checksum: info.checksum})
 	}
-	slices.SortFunc(removed, cmpFunc)
+	slices.SortFunc(removedFiles, cmpFunc)
 
-	modified := make([]ModifiedFile, 0, len(modifiedFiles))
-	for path, info := range modifiedFiles {
-		modified = append(modified, ModifiedFile{
+	modifiedFiles := make([]ModifiedFile, 0, len(modified))
+	for path, info := range modified {
+		modifiedFiles = append(modifiedFiles, ModifiedFile{
 			Path:        path,
 			OldChecksum: info.oldChecksum,
 			NewChecksum: info.newChecksum,
 		})
 	}
-	slices.SortFunc(modified, cmpFunc)
+	slices.SortFunc(modifiedFiles, cmpFunc)
 
-	slices.SortFunc(movedFiles, cmpFunc)
+	slices.SortFunc(moved, cmpFunc)
 
 	return &DiffResult{
-		AddedFiles:    added,
-		RemovedFiles:  removed,
-		ModifiedFiles: modified,
-		MovedFiles:    movedFiles,
+		AddedFiles:    addedFiles,
+		RemovedFiles:  removedFiles,
+		ModifiedFiles: modifiedFiles,
+		MovedFiles:    moved,
 	}
 }
 
