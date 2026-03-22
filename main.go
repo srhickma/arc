@@ -283,17 +283,17 @@ func main() {
 
 	diff := computeDiff(oldSums, newSums)
 
-	for path := range diff.addedFiles {
-		fmt.Printf("   ADDED: %s\n", path)
+	for _, f := range diff.AddedFiles {
+		fmt.Printf("   ADDED: %s\n", f.Path)
 	}
-	for _, info := range diff.movedFiles {
-		fmt.Printf("   MOVED: %s -> %s\n", info.from, info.to)
+	for _, f := range diff.MovedFiles {
+		fmt.Printf("   MOVED: %s -> %s\n", f.From, f.To)
 	}
-	for path := range diff.removedFiles {
-		fmt.Printf(" REMOVED: %s\n", path)
+	for _, f := range diff.RemovedFiles {
+		fmt.Printf(" REMOVED: %s\n", f.Path)
 	}
-	for path, info := range diff.modifiedFiles {
-		fmt.Printf("MODIFIED: %s - %s -> %s\n", path, info.oldChecksum, info.newChecksum)
+	for _, f := range diff.ModifiedFiles {
+		fmt.Printf("MODIFIED: %s - %s -> %s\n", f.Path, f.OldChecksum, f.NewChecksum)
 	}
 
 	if diff.empty() {
@@ -302,7 +302,7 @@ func main() {
 	}
 
 	fmt.Printf("%d added, %d moved, %d removed, %d modified\n",
-		len(diff.addedFiles), len(diff.movedFiles), len(diff.removedFiles), len(diff.modifiedFiles))
+		len(diff.AddedFiles), len(diff.MovedFiles), len(diff.RemovedFiles), len(diff.ModifiedFiles))
 
 	fmt.Printf("write new checksums to %s? [y/N]: ", sumFile)
 	var response string
