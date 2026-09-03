@@ -24,6 +24,11 @@ const (
 	confFile = "arc.conf"
 )
 
+func init() {
+	log.SetFlags(0)
+	log.SetPrefix("fatal: ")
+}
+
 type RawConfig struct {
 	HashType string   `json:"hashType"`
 	Workers  int      `json:"workers"`
@@ -238,11 +243,16 @@ func main() {
 		}
 	}
 
-	if len(posArgs) < 1 {
-		log.Fatal("usage: arc <dir> [--deep]")
+	if len(posArgs) > 1 {
+		log.Fatal("usage: arc [dir] [--deep]")
 	}
 
-	targetDir, err := resolvePath(posArgs[0])
+	dir := "."
+	if len(posArgs) == 1 {
+		dir = posArgs[0]
+	}
+
+	targetDir, err := resolvePath(dir)
 	if err != nil {
 		log.Fatal(err)
 	}
