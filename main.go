@@ -11,9 +11,6 @@ import (
 	"github.com/srhickma/arc/internal/restic"
 )
 
-// version is overridable at build time with -ldflags "-X main.version=...".
-var version = "dev"
-
 func init() {
 	log.SetFlags(0)
 	log.SetPrefix("fatal: ")
@@ -25,7 +22,6 @@ usage:
   arc [dir] [--dry-run] check [--deep]
   arc [dir] [--dry-run] restic[:profile] <subcommand> [restic args...]
   arc [dir] init
-  arc version
 
 [dir] is an optional leading path (default "."). "check" reads arc.conf and
 arc.sum from it directly; the other commands search upward from it for arc.conf.
@@ -38,7 +34,7 @@ global flags:
 func isCommand(tok string) bool {
 	name, _, _ := strings.Cut(tok, ":")
 	switch name {
-	case "check", "restic", "init", "version":
+	case "check", "restic", "init":
 		return true
 	}
 	return false
@@ -93,8 +89,6 @@ func main() {
 		restic.Run(dir, profile, cmdArgs, dryRun)
 	case "init":
 		initcmd.Run(dir)
-	case "version":
-		fmt.Println(version)
 	default:
 		log.Fatalf("unknown command %q (try: arc help)", name)
 	}
