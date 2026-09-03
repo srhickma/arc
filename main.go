@@ -24,6 +24,11 @@ const (
 	confFile = "arc.conf"
 )
 
+func init() {
+	log.SetFlags(0)
+	log.SetPrefix("fatal: ")
+}
+
 type RawConfig struct {
 	HashType string   `json:"hashType"`
 	Workers  int      `json:"workers"`
