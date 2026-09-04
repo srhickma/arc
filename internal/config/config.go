@@ -190,12 +190,13 @@ func parseResticNode(rawNode map[string]any) (*resticNode, error) {
 		case "environ":
 			err = mapstructure.Decode(entry, &node.env)
 		default:
-			rawNode, ok := entry.(map[string]any)
-			if ok {
-				node.subcmds[key], err = parseResticNode(rawNode)
+			// A table-valued key is a nested subcommand; anything else is a
+			// restic flag (flag values are always scalars or arrays)
+			if subcmdNode, ok := entry.(map[string]any); ok {
+				node.subcmds[key], err = parseResticNode(subcmdNode)
+			} else {
+				node.flags[key] = entry
 			}
-
-			node.flags[key] = entry
 		}
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", key, err)
@@ -224,9 +225,9 @@ type ResticInvocation struct {
 //	[restic.profiles.<profile>.<sub>]
 //	command-line args
 //
-// Flags accumulate across layers (restic resolves duplicates last-wins); args
-// are replaced by the last layer that sets them, or by the command-line args if
-// any were given.
+// Flags accumulate across layers (restic resolves duplicates last-wins); the
+// config args are replaced by the last layer that sets them. Command-line args
+// are always appended and never replace the config args.
 func (c *Config) ResolveRestic(profile, subcmd string, cliArgs []string) (*ResticInvocation, error) {
 	resticConf := c.restic
 
@@ -268,10 +269,9 @@ func (c *Config) ResolveRestic(profile, subcmd string, cliArgs []string) (*Resti
 		}
 		argv = append(argv, flagArgs...)
 	}
-	switch {
-	case len(cliArgs) > 0:
-		argv = append(argv, cliArgs...)
-	case argsSet:
+
+	argv = append(argv, cliArgs...)
+	if argsSet {
 		for _, arg := range args {
 			argv = append(argv, util.ExpandTilde(arg))
 		}

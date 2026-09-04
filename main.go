@@ -8,9 +8,9 @@ import (
 	"strings"
 
 	"github.com/srhickma/arc/internal/check"
-	"github.com/srhickma/arc/internal/config"
 	"github.com/srhickma/arc/internal/initcmd"
 	"github.com/srhickma/arc/internal/restic"
+	"github.com/srhickma/arc/internal/util"
 )
 
 func init() {
@@ -56,7 +56,7 @@ func main() {
 		args = args[1:]
 	}
 
-	dir, err := filepath.Abs(config.ExpandTilde(dir))
+	dir, err := filepath.Abs(util.ExpandTilde(dir))
 	if err != nil {
 		log.Fatal(err)
 	}
