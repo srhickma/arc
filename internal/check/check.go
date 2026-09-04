@@ -13,7 +13,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -28,29 +27,6 @@ const (
 	colorYellow = "\033[33m"
 	colorRed    = "\033[31m"
 )
-
-type runConfig struct {
-	HashType       string
-	Workers        int
-	IgnorePatterns []*regexp.Regexp
-}
-
-// TODO this should be part of the config directory
-func compileConfig(checkConf config.CheckConfig) (*runConfig, error) {
-	var patterns []*regexp.Regexp
-	for _, pattern := range checkConf.Ignore {
-		compiled, err := regexp.Compile(pattern)
-		if err != nil {
-			return nil, fmt.Errorf("invalid ignore pattern %q: %w", pattern, err)
-		}
-		patterns = append(patterns, compiled)
-	}
-	return &runConfig{
-		HashType:       checkConf.HashType,
-		Workers:        checkConf.Workers,
-		IgnorePatterns: patterns,
-	}, nil
-}
 
 type hasher struct {
 	hashFactory func() hash.Hash
@@ -93,8 +69,8 @@ type fileInfo struct {
 	ModTime  time.Time `json:"modTime"`
 }
 
-func computeChecksums(targetDir string, runConf *runConfig, oldSums map[string]fileInfo, deep bool) (map[string]fileInfo, int, int64, error) {
-	hasher, err := newHasher(runConf.HashType)
+func computeChecksums(targetDir string, conf config.CheckConfig, oldSums map[string]fileInfo, deep bool) (map[string]fileInfo, int, int64, error) {
+	hasher, err := newHasher(conf.HashType)
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -109,11 +85,11 @@ func computeChecksums(targetDir string, runConf *runConfig, oldSums map[string]f
 		name string
 		info fs.FileInfo
 	}
-	fhChan := make(chan fileHandle, runConf.Workers)
+	fhChan := make(chan fileHandle, conf.Workers)
 
 	wg := sync.WaitGroup{}
 
-	for range runConf.Workers {
+	for range conf.Workers {
 		wg.Go(func() {
 			for {
 				fh, ok := <-fhChan
@@ -153,7 +129,7 @@ func computeChecksums(targetDir string, runConf *runConfig, oldSums map[string]f
 			// filtering out its contents.
 			pathInTarget += string(filepath.Separator)
 
-			for _, pattern := range runConf.IgnorePatterns {
+			for _, pattern := range conf.IgnorePatterns {
 				if pattern.MatchString(pathInTarget) {
 					return fs.SkipDir
 				}
@@ -165,7 +141,7 @@ func computeChecksums(targetDir string, runConf *runConfig, oldSums map[string]f
 			return nil
 		}
 
-		for _, pattern := range runConf.IgnorePatterns {
+		for _, pattern := range conf.IgnorePatterns {
 			if pattern.MatchString(pathInTarget) {
 				return nil
 			}
@@ -229,13 +205,8 @@ func Run(dir string, args []string, dryRun bool) {
 		log.Fatal(err)
 	}
 
-	runConf, err := compileConfig(conf.Check)
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	oldSums := make(map[string]fileInfo)
-	sumPath := filepath.Join(dir, sumFile)
+	sumPath := filepath.Join(conf.Dir, sumFile)
 	if bytes, err := os.ReadFile(sumPath); err == nil {
 		if err := json.Unmarshal(bytes, &oldSums); err != nil {
 			log.Fatal(err)
@@ -250,7 +221,7 @@ func Run(dir string, args []string, dryRun bool) {
 
 	startTime := time.Now()
 
-	newSums, numChecksums, totalBytes, err := computeChecksums(dir, runConf, oldSums, deep)
+	newSums, numChecksums, totalBytes, err := computeChecksums(conf.Dir, conf.Check, oldSums, deep)
 	if err != nil {
 		log.Fatal(err)
 	}

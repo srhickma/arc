@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -40,11 +41,44 @@ type Config struct {
 	restic *resticConfig
 }
 
-// CheckConfig is the resolved [check] section
+// CheckConfig is the resolved [check] section, ready for use
 type CheckConfig struct {
-	HashType string   `mapstructure:"hash-type"`
-	Workers  int      `mapstructure:"workers"`
-	Ignore   []string `mapstructure:"ignore"`
+	HashType       string
+	Workers        int
+	IgnorePatterns []*regexp.Regexp
+}
+
+// parseCheck decodes and resolves the [check] table: it applies defaults and
+// compiles the ignore patterns
+func parseCheck(raw map[string]any) (CheckConfig, error) {
+	rawCheck := struct {
+		HashType string   `mapstructure:"hash-type"`
+		Workers  int      `mapstructure:"workers"`
+		Ignore   []string `mapstructure:"ignore"`
+	}{
+		HashType: "sha256",
+		Workers:  runtime.NumCPU(),
+	}
+	if raw != nil {
+		if err := decodeStrict(raw, &rawCheck); err != nil {
+			return CheckConfig{}, err
+		}
+	}
+
+	var ignorePatterns []*regexp.Regexp
+	for _, pattern := range rawCheck.Ignore {
+		compiled, err := regexp.Compile(pattern)
+		if err != nil {
+			return CheckConfig{}, fmt.Errorf("invalid ignore pattern %q: %w", pattern, err)
+		}
+		ignorePatterns = append(ignorePatterns, compiled)
+	}
+
+	return CheckConfig{
+		HashType:       rawCheck.HashType,
+		Workers:        rawCheck.Workers,
+		IgnorePatterns: ignorePatterns,
+	}, nil
 }
 
 // resticConfig is the parsed [restic] section
@@ -108,11 +142,9 @@ func load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("parsing %s: %w", configPath, err)
 	}
 
-	check := CheckConfig{HashType: "sha256", Workers: runtime.NumCPU()}
-	if raw.Check != nil {
-		if err := decodeStrict(raw.Check, &check); err != nil {
-			return nil, fmt.Errorf("parsing %s: [check] %w", configPath, err)
-		}
+	check, err := parseCheck(raw.Check)
+	if err != nil {
+		return nil, fmt.Errorf("parsing %s: [check] %w", configPath, err)
 	}
 
 	var restic *resticConfig
