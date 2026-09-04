@@ -11,55 +11,37 @@ import (
 	"github.com/srhickma/arc/internal/config"
 )
 
-// Run executes the "arc restic[:profile]" subcommand.
-//
-// dir is where the search for arc.conf begins (walking upward). profile is the
-// optional ":name" suffix from the command token. args is everything after the
-// token: the restic subcommand followed by any arguments to pass straight
-// through to restic.
+// Run executes "arc restic[:profile]"
 func Run(dir, profile string, args []string, dryRun bool) {
-	sub := ""
-	var cliArgs []string
-	if len(args) > 0 {
-		sub = args[0]
+	subcmd := ""
+	cliArgs := args
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		subcmd = args[0]
 		cliArgs = args[1:]
 	}
 
-	if strings.HasPrefix(sub, "-") {
-		log.Fatalf("expected a restic subcommand, got %q; arc's global flags go before the command (e.g. arc --dry-run restic backup)", sub)
-	}
-
-	start, err := config.ResolveDir(dir)
-	if err != nil {
-		log.Fatal(err)
-	}
-	confPath, err := config.Discover(start)
+	conf, err := config.Load(dir)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	cf, err := config.Load(confPath)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	inv, err := cf.ResolveRestic(profile, sub, cliArgs)
+	invocation, err := conf.ResolveRestic(profile, subcmd, cliArgs)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	if dryRun {
-		fmt.Printf("cwd:  %s\n", cf.Root)
-		for _, e := range inv.Env {
-			fmt.Printf("env:  %s\n", e)
+		fmt.Printf("cwd:  %s\n", conf.Dir)
+		for _, envVar := range invocation.Env {
+			fmt.Printf("env:  %s\n", envVar)
 		}
-		fmt.Printf("exec: restic %s\n", strings.Join(inv.Argv, " "))
+		fmt.Printf("exec: restic %s\n", strings.Join(invocation.Argv, " "))
 		return
 	}
 
-	cmd := exec.Command("restic", inv.Argv...)
-	cmd.Dir = cf.Root
-	cmd.Env = append(os.Environ(), inv.Env...)
+	cmd := exec.Command("restic", invocation.Argv...)
+	cmd.Dir = conf.Dir
+	cmd.Env = append(os.Environ(), invocation.Env...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

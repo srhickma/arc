@@ -9,10 +9,10 @@ import (
 	"runtime"
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/pelletier/go-toml/v2"
+	"github.com/srhickma/arc/internal/util"
 )
 
 const FileName = "arc.conf"
@@ -33,181 +33,183 @@ exclude-file = ".resticignore"
 # repo = "remote-repo-url"
 `
 
-// Config is a parsed arc.conf.
+// Config is a parsed arc.conf
 type Config struct {
-	// Path is the absolute path the config was loaded from.
-	Path string
-	// Root is the directory containing the config file. For "restic" it is
-	// used as the working directory of the restic child process.
-	Root string
-	// Check holds the resolved [check] section.
-	Check CheckConfig
-
-	restic *resticTree
+	Dir    string
+	Check  CheckConfig
+	restic *resticConfig
 }
 
-// CheckConfig is the resolved [check] section.
+// CheckConfig is the resolved [check] section
 type CheckConfig struct {
 	HashType string   `mapstructure:"hash-type"`
 	Workers  int      `mapstructure:"workers"`
 	Ignore   []string `mapstructure:"ignore"`
 }
 
-// resticTree is the parsed [restic] section: a root of shared config plus any
-// named profiles.
-type resticTree struct {
-	root     *section
-	profiles map[string]*section
+// resticConfig is the parsed [restic] section
+type resticConfig struct {
+	root     *resticNode
+	profiles map[string]*resticNode
 }
 
-// section is one node of the [restic] tree. A key whose value is a table is a
-// nested subcommand section (except the reserved "environ"); every other key is
-// a restic flag.
-type section struct {
+// resticNode is one node of the [restic] config tree
+type resticNode struct {
 	flags   map[string]any
 	args    []string
 	argsSet bool
 	env     map[string]string
-	subs    map[string]*section
+	subcmds map[string]*resticNode
 }
 
-// ResolveDir expands a leading ~ and returns an absolute path.
-func ResolveDir(path string) (string, error) {
-	return filepath.Abs(expand(path))
-}
-
-// Discover walks up from start until it finds a directory containing arc.conf.
-func Discover(start string) (string, error) {
-	dir, err := filepath.Abs(start)
-	if err != nil {
-		return "", err
+func Load(dir string) (*Config, error) {
+	configPath, found := FindConfig(dir)
+	if !found {
+		return nil, fmt.Errorf("no %s found in %s or any parent directory", FileName, dir)
 	}
+
+	return load(configPath)
+}
+
+// FindConfig walks up from dir until it finds a directory containing a config file
+func FindConfig(dir string) (string, bool) {
 	for {
-		p := filepath.Join(dir, FileName)
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			return p, nil
+		candidate := filepath.Join(dir, FileName)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, true
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", fmt.Errorf("no %s found in %s or any parent directory", FileName, start)
+			return "", false
 		}
 		dir = parent
 	}
 }
 
-// Load reads and parses the config file at path.
-func Load(path string) (*Config, error) {
-	abs, err := filepath.Abs(path)
+func load(configPath string) (*Config, error) {
+	configPath, err := filepath.Abs(configPath)
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(abs)
+	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, err
 	}
 
 	// [check] has a fixed schema; [restic] has arbitrary flag keys, so both
-	// come back as raw trees and are interpreted below.
+	// come back as raw trees and are interpreted below
 	var raw struct {
 		Check  map[string]any `toml:"check"`
 		Restic map[string]any `toml:"restic"`
 	}
-	dec := toml.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&raw); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", abs, err)
+	decoder := toml.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&raw); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", configPath, err)
 	}
 
 	check := CheckConfig{HashType: "sha256", Workers: runtime.NumCPU()}
 	if raw.Check != nil {
 		if err := decodeStrict(raw.Check, &check); err != nil {
-			return nil, fmt.Errorf("parsing %s: [check] %w", abs, err)
+			return nil, fmt.Errorf("parsing %s: [check] %w", configPath, err)
 		}
 	}
 
-	var restic *resticTree
+	var restic *resticConfig
 	if raw.Restic != nil {
 		restic, err = parseRestic(raw.Restic)
 		if err != nil {
-			return nil, fmt.Errorf("parsing %s: [restic] %w", abs, err)
+			return nil, fmt.Errorf("parsing %s: [restic] %w", configPath, err)
 		}
 	}
 
-	return &Config{Path: abs, Root: filepath.Dir(abs), Check: check, restic: restic}, nil
+	return &Config{
+		Dir:    filepath.Dir(configPath),
+		Check:  check,
+		restic: restic,
+	}, nil
 }
 
-// decodeStrict decodes a raw TOML table into out, rejecting unknown keys.
+// decodeStrict decodes a raw TOML table into out, rejecting unknown keys
 func decodeStrict(raw map[string]any, out any) error {
-	d, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
 		Result:      out,
 		ErrorUnused: true,
 	})
 	if err != nil {
 		return err
 	}
-	return d.Decode(raw)
+	return decoder.Decode(raw)
 }
 
-func parseRestic(raw map[string]any) (*resticTree, error) {
-	t := &resticTree{profiles: map[string]*section{}}
-	if p, ok := raw["profiles"]; ok {
+func parseRestic(raw map[string]any) (*resticConfig, error) {
+	profiles := map[string]*resticNode{}
+
+	if rawProfiles, ok := raw["profiles"]; ok {
 		delete(raw, "profiles")
-		pm, ok := p.(map[string]any)
+		profilesTable, ok := rawProfiles.(map[string]any)
 		if !ok {
 			return nil, fmt.Errorf("profiles must be a table")
 		}
-		for name, v := range pm {
-			s, err := parseSection(v)
+		for name, rawNode := range profilesTable {
+			rawNode, ok := rawNode.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("profiles.%s must be a table", name)
+			}
+			node, err := parseResticNode(rawNode)
 			if err != nil {
 				return nil, fmt.Errorf("profiles.%s: %w", name, err)
 			}
-			t.profiles[name] = s
+			profiles[name] = node
 		}
 	}
-	root, err := parseSection(raw)
+
+	root, err := parseResticNode(raw)
 	if err != nil {
 		return nil, err
 	}
-	t.root = root
-	return t, nil
+
+	return &resticConfig{
+		profiles: profiles,
+		root:     root,
+	}, nil
 }
 
-func parseSection(v any) (*section, error) {
-	raw, ok := v.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("expected a table")
+func parseResticNode(rawNode map[string]any) (*resticNode, error) {
+	node := &resticNode{
+		flags:   map[string]any{},
+		subcmds: map[string]*resticNode{},
 	}
-	s := &section{flags: map[string]any{}, subs: map[string]*section{}}
-	for k, val := range raw {
+
+	for key, entry := range rawNode {
 		var err error
-		switch {
-		case k == "args":
-			err = mapstructure.Decode(val, &s.args)
-			s.argsSet = err == nil
-		case k == "environ":
-			err = mapstructure.Decode(val, &s.env)
-		case isTable(val):
-			s.subs[k], err = parseSection(val)
+		switch key {
+		case "args":
+			err = mapstructure.Decode(entry, &node.args)
+			node.argsSet = err == nil
+		case "environ":
+			err = mapstructure.Decode(entry, &node.env)
 		default:
-			s.flags[k] = val
+			rawNode, ok := entry.(map[string]any)
+			if ok {
+				node.subcmds[key], err = parseResticNode(rawNode)
+			}
+
+			node.flags[key] = entry
 		}
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", k, err)
+			return nil, fmt.Errorf("%s: %w", key, err)
 		}
 	}
-	return s, nil
+
+	return node, nil
 }
 
-func isTable(v any) bool {
-	_, ok := v.(map[string]any)
-	return ok
-}
-
-// ResticInvocation is a fully-resolved plan for a single `arc restic` call.
+// ResticInvocation is a fully-resolved plan for a single `arc restic` call
 type ResticInvocation struct {
-	// Argv is the argument vector for restic, starting with the subcommand.
+	// Argv is the argument vector for restic, starting with the subcommand
 	Argv []string
-	// Env is a list of KEY=VALUE strings to append to the current environment.
+	// Env is a list of KEY=VALUE strings to append to the current environment
 	Env []string
 }
 
@@ -222,128 +224,111 @@ type ResticInvocation struct {
 //	[restic.profiles.<profile>.<sub>]
 //	command-line args
 //
-// A later layer overrides an earlier one per flag key and for args. Command-line
-// args, if any, replace the config args entirely.
-func (c *Config) ResolveRestic(profile, sub string, cliArgs []string) (*ResticInvocation, error) {
-	t := c.restic
-	if t == nil {
-		return nil, fmt.Errorf("%s has no [restic] section", c.Path)
-	}
+// Flags accumulate across layers (restic resolves duplicates last-wins); args
+// are replaced by the last layer that sets them, or by the command-line args if
+// any were given.
+func (c *Config) ResolveRestic(profile, subcmd string, cliArgs []string) (*ResticInvocation, error) {
+	resticConf := c.restic
 
-	// With no subcommand there is nothing to resolve against; proxy the raw
-	// args straight through (e.g. `arc restic --help`).
-	if sub == "" {
+	// With no config or no subcommand there is nothing to resolve against, so proxy the
+	// raw args straight through
+	if resticConf == nil || subcmd == "" {
 		return &ResticInvocation{Argv: slices.Clone(cliArgs)}, nil
 	}
 
-	layers := []*section{t.root, t.root.subs[sub]}
+	layers := []*resticNode{resticConf.root, resticConf.root.subcmds[subcmd]}
 	if profile != "" {
-		p, ok := t.profiles[profile]
+		profileNode, ok := resticConf.profiles[profile]
 		if !ok {
 			return nil, fmt.Errorf("unknown restic profile %q", profile)
 		}
-		layers = append(layers, p, p.subs[sub])
+		layers = append(layers, profileNode, profileNode.subcmds[subcmd])
 	}
 
 	flags := map[string]any{}
 	env := map[string]string{}
 	var args []string
 	argsSet := false
-	for _, l := range layers {
-		if l == nil {
+	for _, layer := range layers {
+		if layer == nil {
 			continue
 		}
-		maps.Copy(flags, l.flags)
-		maps.Copy(env, l.env)
-		if l.argsSet {
-			args, argsSet = l.args, true
+		maps.Copy(flags, layer.flags)
+		maps.Copy(env, layer.env)
+		if layer.argsSet {
+			args, argsSet = layer.args, true
 		}
 	}
 
-	argv := []string{sub}
-	for _, k := range slices.Sorted(maps.Keys(flags)) {
-		a, err := flagToArgs(k, flags[k])
+	argv := []string{subcmd}
+	for _, key := range slices.Sorted(maps.Keys(flags)) {
+		flagArgs, err := flagToArgs(key, flags[key])
 		if err != nil {
 			return nil, err
 		}
-		argv = append(argv, a...)
+		argv = append(argv, flagArgs...)
 	}
 	switch {
 	case len(cliArgs) > 0:
 		argv = append(argv, cliArgs...)
 	case argsSet:
-		for _, a := range args {
-			argv = append(argv, expand(a))
+		for _, arg := range args {
+			argv = append(argv, util.ExpandTilde(arg))
 		}
 	}
 
-	out := make([]string, 0, len(env))
-	for _, k := range slices.Sorted(maps.Keys(env)) {
-		out = append(out, k+"="+expand(env[k]))
+	envEntries := make([]string, 0, len(env))
+	for _, key := range slices.Sorted(maps.Keys(env)) {
+		envEntries = append(envEntries, key+"="+util.ExpandTilde(env[key]))
 	}
 
-	return &ResticInvocation{Argv: argv, Env: out}, nil
+	return &ResticInvocation{Argv: argv, Env: envEntries}, nil
 }
 
 // flagToArgs turns one config flag key and value into restic argv tokens:
 // scalars become "--key value", true becomes a bare "--key", false is dropped,
-// and arrays repeat the flag.
-func flagToArgs(key string, val any) ([]string, error) {
+// and arrays repeat the flag
+func flagToArgs(key string, value any) ([]string, error) {
 	flag := "--" + key
 	if len(key) == 1 {
 		flag = "-" + key
 	}
-	switch v := val.(type) {
+	switch typed := value.(type) {
 	case bool:
-		if v {
+		if typed {
 			return []string{flag}, nil
 		}
 		return nil, nil
 	case []any:
-		var out []string
-		for _, e := range v {
-			s, err := scalarString(e)
+		var args []string
+		for _, element := range typed {
+			str, err := scalarString(element)
 			if err != nil {
 				return nil, fmt.Errorf("%s: %w", key, err)
 			}
-			out = append(out, flag, expand(s))
+			args = append(args, flag, util.ExpandTilde(str))
 		}
-		return out, nil
+		return args, nil
 	default:
-		s, err := scalarString(v)
+		str, err := scalarString(value)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", key, err)
 		}
-		return []string{flag, expand(s)}, nil
+		return []string{flag, util.ExpandTilde(str)}, nil
 	}
 }
 
-func scalarString(v any) (string, error) {
-	switch x := v.(type) {
+func scalarString(value any) (string, error) {
+	switch typed := value.(type) {
 	case string:
-		return x, nil
+		return typed, nil
 	case bool:
-		return strconv.FormatBool(x), nil
+		return strconv.FormatBool(typed), nil
 	case int64:
-		return strconv.FormatInt(x, 10), nil
+		return strconv.FormatInt(typed, 10), nil
 	case float64:
-		return strconv.FormatFloat(x, 'f', -1, 64), nil
+		return strconv.FormatFloat(typed, 'f', -1, 64), nil
 	default:
-		return "", fmt.Errorf("expected a scalar, got %T", v)
+		return "", fmt.Errorf("expected a scalar, got %T", value)
 	}
-}
-
-// expand resolves a leading ~ to the user's home directory.
-func expand(s string) string {
-	if s != "~" && !strings.HasPrefix(s, "~/") {
-		return s
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return s
-	}
-	if s == "~" {
-		return home
-	}
-	return filepath.Join(home, s[2:])
 }

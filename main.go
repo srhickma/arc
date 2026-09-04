@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/srhickma/arc/internal/check"
+	"github.com/srhickma/arc/internal/config"
 	"github.com/srhickma/arc/internal/initcmd"
 	"github.com/srhickma/arc/internal/restic"
 )
@@ -30,9 +32,9 @@ global flags:
   --dry-run    show what would happen without writing arc.sum / running restic
 `
 
-// isCommand reports whether tok names a subcommand rather than a directory.
-func isCommand(tok string) bool {
-	name, _, _ := strings.Cut(tok, ":")
+// isCommand reports whether token names a subcommand rather than a directory
+func isCommand(token string) bool {
+	name, _, _ := strings.Cut(token, ":")
 	switch name {
 	case "check", "restic", "init":
 		return true
@@ -52,6 +54,11 @@ func main() {
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") && !isCommand(args[0]) {
 		dir = args[0]
 		args = args[1:]
+	}
+
+	dir, err := filepath.Abs(config.ExpandTilde(dir))
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	var dryRun bool

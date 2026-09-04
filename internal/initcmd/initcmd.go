@@ -9,19 +9,16 @@ import (
 	"github.com/srhickma/arc/internal/config"
 )
 
-// Run executes "arc init": it writes a starter arc.conf into dir.
+// Run executes "arc init": it writes a starter arc.conf into dir
 func Run(dir string) {
-	d, err := config.ResolveDir(dir)
-	if err != nil {
-		log.Fatal(err)
+	configPath, found := config.FindConfig(dir)
+	if found {
+		log.Fatalf("directory is already configured by %s", configPath)
 	}
 
-	path := filepath.Join(d, config.FileName)
-	if _, err := os.Stat(path); err == nil {
-		log.Fatalf("%s already exists", path)
-	}
-	if err := os.WriteFile(path, []byte(config.Template), 0644); err != nil {
+	configPath = filepath.Join(dir, config.FileName)
+	if err := os.WriteFile(configPath, []byte(config.Template), 0644); err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("wrote %s\n", path)
+	fmt.Printf("wrote %s\n", configPath)
 }
