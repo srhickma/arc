@@ -18,42 +18,42 @@ func init() {
 	log.SetPrefix("fatal: ")
 }
 
-const usage = `arc - client-side integrity protection and a restic wrapper
+const usage = `arc - restic wrapper with client-side integrity protection
 
 usage:
-  arc [dir] [--dry-run] check [--deep]
-  arc [dir] [--dry-run] restic[:profile] <subcommand> [restic args...]
-  arc [dir] init
-
-[dir] is an optional leading path (default "."). "check" reads arc.conf and
-arc.sum from it directly; the other commands search upward from it for arc.conf.
+  arc [flags] restic[:profile] [restic args...]
+  arc [flags] check [--deep]
+  arc [flags] init
 
 global flags:
-  --dry-run    show what would happen without writing arc.sum / running restic
+  --dir <path>   directory to operate in (default ".")
+  --dry-run      read-only mode; print commands to run but don't run them
 `
-
-// isCommand reports whether token names a subcommand rather than a directory
-func isCommand(token string) bool {
-	name, _, _ := strings.Cut(token, ":")
-	switch name {
-	case "check", "restic", "init":
-		return true
-	}
-	return false
-}
 
 func main() {
 	args := os.Args[1:]
 
-	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help") {
-		fmt.Print(usage)
-		return
-	}
-
 	dir := "."
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") && !isCommand(args[0]) {
-		dir = args[0]
-		args = args[1:]
+	dryRun := false
+
+loop:
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--dir":
+			i++
+			if i >= len(args) {
+				log.Fatal("--dir requires a path")
+			}
+			dir = args[i]
+		case "--dry-run":
+			dryRun = true
+		case "-h", "--help", "help":
+			fmt.Print(usage)
+			return
+		default:
+			args = args[i:]
+			break loop
+		}
 	}
 
 	dir, err := filepath.Abs(util.ExpandTilde(dir))
@@ -61,42 +61,26 @@ func main() {
 		log.Fatal(err)
 	}
 
-	var dryRun bool
-	i := 0
-	for i < len(args) {
-		switch args[i] {
-		case "--dry-run":
-			dryRun = true
-			i++
-			continue
-		case "-h", "--help", "help":
-			fmt.Print(usage)
-			return
-		}
-		break
-	}
-	rest := args[i:]
-
-	if len(rest) == 0 {
+	if len(args) == 0 {
 		fmt.Print(usage)
 		os.Exit(2)
 	}
 
-	name, profile, hasProfile := strings.Cut(rest[0], ":")
-	cmdArgs := rest[1:]
+	subcmd, profile, hasProfile := strings.Cut(args[0], ":")
+	args = args[1:]
 
-	if hasProfile && name != "restic" {
-		log.Fatalf("%q does not take a :profile suffix", name)
+	if hasProfile && subcmd != "restic" {
+		log.Fatalf("%q does not take a :profile suffix", subcmd)
 	}
 
-	switch name {
+	switch subcmd {
 	case "check":
-		check.Run(dir, cmdArgs, dryRun)
+		check.Run(dir, args, dryRun)
 	case "restic":
-		restic.Run(dir, profile, cmdArgs, dryRun)
+		restic.Run(dir, profile, args, dryRun)
 	case "init":
 		initcmd.Run(dir)
 	default:
-		log.Fatalf("unknown command %q (try: arc help)", name)
+		log.Fatalf("unknown command %q", subcmd)
 	}
 }
