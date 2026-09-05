@@ -240,8 +240,8 @@ func parseResticNode(rawNode map[string]any) (*resticNode, error) {
 
 // ResticInvocation is a fully-resolved plan for a single `arc restic` call
 type ResticInvocation struct {
-	// Argv is the argument vector for restic, starting with the subcommand
-	Argv []string
+	// Args is the argument list for restic, starting with the subcommand
+	Args []string
 	// Env is a list of KEY=VALUE strings to append to the current environment
 	Env []string
 }
@@ -266,7 +266,7 @@ func (c *Config) ResolveRestic(profile, subcmd string, cliArgs []string) (*Resti
 	// With no config or no subcommand there is nothing to resolve against, so proxy the
 	// raw args straight through
 	if resticConf == nil || subcmd == "" {
-		return &ResticInvocation{Argv: slices.Clone(cliArgs)}, nil
+		return &ResticInvocation{Args: slices.Clone(cliArgs)}, nil
 	}
 
 	layers := []*resticNode{resticConf.root, resticConf.root.subcmds[subcmd]}
@@ -314,7 +314,7 @@ func (c *Config) ResolveRestic(profile, subcmd string, cliArgs []string) (*Resti
 		envEntries = append(envEntries, key+"="+util.ExpandTilde(env[key]))
 	}
 
-	return &ResticInvocation{Argv: argv, Env: envEntries}, nil
+	return &ResticInvocation{Args: argv, Env: envEntries}, nil
 }
 
 // flagToArgs turns one config flag key and value into restic argv tokens:
