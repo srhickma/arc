@@ -58,7 +58,7 @@ Initializes the target directory with a starter config.
 Walks the directory, computes checksums, and diffs them against `arc.sum`:
 ```
 starting shallow check (modified files) ...
-finished checking 4212 file(s) in 1.204s; 7 checksum(s) calculated over 84.31MB
+finished checking 4212 file(s) in 98ms; 4 checksum(s) calculated over 43.31MB
    ADDED: /data/archive/2026/img-4417.jpg
    MOVED: /data/archive/inbox/scan.pdf -> /data/archive/docs/scan-xyz.pdf
  REMOVED: /data/archive/tmp/thumb.png
