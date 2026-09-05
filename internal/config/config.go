@@ -25,7 +25,7 @@ ignore = [".DS_Store$"]
 
 [restic.backup]
 args = ["."]
-exclude-file = ".resticignore"
+# exclude-file = ".resticignore"
 
 # [restic.profiles.local]
 # repo = "/path/to/repo"
@@ -41,16 +41,91 @@ type Config struct {
 	restic *resticConfig
 }
 
-// CheckConfig is the resolved [check] section, ready for use
+func Load(dir string) (*Config, error) {
+	configPath, found := FindConfig(dir)
+	if !found {
+		return nil, fmt.Errorf("no %s found in %s or any parent directory", FileName, dir)
+	}
+
+	return load(configPath)
+}
+
+// FindConfig walks up from dir until it finds a directory containing a config file
+func FindConfig(dir string) (string, bool) {
+	for {
+		candidate := filepath.Join(dir, FileName)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
+}
+
+func load(configPath string) (*Config, error) {
+	configPath, err := filepath.Abs(configPath)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var raw struct {
+		Check  map[string]any `toml:"check"`
+		Restic map[string]any `toml:"restic"`
+	}
+	decoder := toml.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&raw); err != nil {
+		return nil, fmt.Errorf("error parsing %s: %w", configPath, err)
+	}
+
+	check, err := parseCheckConfig(raw.Check)
+	if err != nil {
+		return nil, fmt.Errorf("error parsing %s: [check] %w", configPath, err)
+	}
+
+	var restic *resticConfig
+	if raw.Restic != nil {
+		restic, err = parseResticConfig(raw.Restic)
+		if err != nil {
+			return nil, fmt.Errorf("error parsing %s: [restic] %w", configPath, err)
+		}
+	}
+
+	return &Config{
+		Dir:    filepath.Dir(configPath),
+		Check:  check,
+		restic: restic,
+	}, nil
+}
+
+// decodeStrict decodes a raw TOML table into out, rejecting unknown keys
+func decodeStrict(raw map[string]any, out any) error {
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		Result:      out,
+		ErrorUnused: true,
+	})
+	if err != nil {
+		return err
+	}
+	return decoder.Decode(raw)
+}
+
+// CheckConfig is the resolved [check] section
 type CheckConfig struct {
 	HashType       string
 	Workers        int
 	IgnorePatterns []*regexp.Regexp
 }
 
-// parseCheck decodes and resolves the [check] table: it applies defaults and
-// compiles the ignore patterns
-func parseCheck(raw map[string]any) (CheckConfig, error) {
+// parseCheckConfig decodes and resolves the [check] table
+func parseCheckConfig(raw map[string]any) (CheckConfig, error) {
 	rawCheck := struct {
 		HashType string   `mapstructure:"hash-type"`
 		Workers  int      `mapstructure:"workers"`
@@ -91,90 +166,11 @@ type resticConfig struct {
 type resticNode struct {
 	flags   map[string]any
 	args    []string
-	argsSet bool
 	env     map[string]string
 	subcmds map[string]*resticNode
 }
 
-func Load(dir string) (*Config, error) {
-	configPath, found := FindConfig(dir)
-	if !found {
-		return nil, fmt.Errorf("no %s found in %s or any parent directory", FileName, dir)
-	}
-
-	return load(configPath)
-}
-
-// FindConfig walks up from dir until it finds a directory containing a config file
-func FindConfig(dir string) (string, bool) {
-	for {
-		candidate := filepath.Join(dir, FileName)
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate, true
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", false
-		}
-		dir = parent
-	}
-}
-
-func load(configPath string) (*Config, error) {
-	configPath, err := filepath.Abs(configPath)
-	if err != nil {
-		return nil, err
-	}
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return nil, err
-	}
-
-	// [check] has a fixed schema; [restic] has arbitrary flag keys, so both
-	// come back as raw trees and are interpreted below
-	var raw struct {
-		Check  map[string]any `toml:"check"`
-		Restic map[string]any `toml:"restic"`
-	}
-	decoder := toml.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&raw); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", configPath, err)
-	}
-
-	check, err := parseCheck(raw.Check)
-	if err != nil {
-		return nil, fmt.Errorf("parsing %s: [check] %w", configPath, err)
-	}
-
-	var restic *resticConfig
-	if raw.Restic != nil {
-		restic, err = parseRestic(raw.Restic)
-		if err != nil {
-			return nil, fmt.Errorf("parsing %s: [restic] %w", configPath, err)
-		}
-	}
-
-	return &Config{
-		Dir:    filepath.Dir(configPath),
-		Check:  check,
-		restic: restic,
-	}, nil
-}
-
-// decodeStrict decodes a raw TOML table into out, rejecting unknown keys
-func decodeStrict(raw map[string]any, out any) error {
-	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
-		Result:      out,
-		ErrorUnused: true,
-	})
-	if err != nil {
-		return err
-	}
-	return decoder.Decode(raw)
-}
-
-func parseRestic(raw map[string]any) (*resticConfig, error) {
+func parseResticConfig(raw map[string]any) (*resticConfig, error) {
 	profiles := map[string]*resticNode{}
 
 	if rawProfiles, ok := raw["profiles"]; ok {
@@ -218,7 +214,6 @@ func parseResticNode(rawNode map[string]any) (*resticNode, error) {
 		switch key {
 		case "args":
 			err = mapstructure.Decode(entry, &node.args)
-			node.argsSet = err == nil
 		case "environ":
 			err = mapstructure.Decode(entry, &node.env)
 		default:
@@ -240,10 +235,8 @@ func parseResticNode(rawNode map[string]any) (*resticNode, error) {
 
 // ResticInvocation is a fully-resolved plan for a single `arc restic` call
 type ResticInvocation struct {
-	// Args is the argument list for restic, starting with the subcommand
 	Args []string
-	// Env is a list of KEY=VALUE strings to append to the current environment
-	Env []string
+	Env  []string
 }
 
 // ResolveRestic merges the [restic] config layers for the given profile and
@@ -255,23 +248,20 @@ type ResticInvocation struct {
 //	[restic.<sub>]
 //	[restic.profiles.<profile>]
 //	[restic.profiles.<profile>.<sub>]
-//	command-line args
+//	cli args
 //
-// Flags accumulate across layers (restic resolves duplicates last-wins); the
-// config args are replaced by the last layer that sets them. Command-line args
-// are always appended and never replace the config args.
+// Flags accumulate across layers. Config args are replaced by the last layer
+// that sets them. Cli args are appended in addition to config args.
 func (c *Config) ResolveRestic(profile, subcmd string, cliArgs []string) (*ResticInvocation, error) {
-	resticConf := c.restic
-
 	// With no config or no subcommand there is nothing to resolve against, so proxy the
 	// raw args straight through
-	if resticConf == nil || subcmd == "" {
+	if c.restic == nil || subcmd == "" {
 		return &ResticInvocation{Args: slices.Clone(cliArgs)}, nil
 	}
 
-	layers := []*resticNode{resticConf.root, resticConf.root.subcmds[subcmd]}
+	layers := []*resticNode{c.restic.root, c.restic.root.subcmds[subcmd]}
 	if profile != "" {
-		profileNode, ok := resticConf.profiles[profile]
+		profileNode, ok := c.restic.profiles[profile]
 		if !ok {
 			return nil, fmt.Errorf("unknown restic profile %q", profile)
 		}
@@ -281,32 +271,29 @@ func (c *Config) ResolveRestic(profile, subcmd string, cliArgs []string) (*Resti
 	flags := map[string]any{}
 	env := map[string]string{}
 	var args []string
-	argsSet := false
 	for _, layer := range layers {
 		if layer == nil {
 			continue
 		}
 		maps.Copy(flags, layer.flags)
 		maps.Copy(env, layer.env)
-		if layer.argsSet {
-			args, argsSet = layer.args, true
+		if len(layer.args) > 0 {
+			args = layer.args
 		}
 	}
 
-	argv := []string{subcmd}
+	fullArgs := []string{subcmd}
 	for _, key := range slices.Sorted(maps.Keys(flags)) {
 		flagArgs, err := flagToArgs(key, flags[key])
 		if err != nil {
 			return nil, err
 		}
-		argv = append(argv, flagArgs...)
+		fullArgs = append(fullArgs, flagArgs...)
 	}
 
-	argv = append(argv, cliArgs...)
-	if argsSet {
-		for _, arg := range args {
-			argv = append(argv, util.ExpandTilde(arg))
-		}
+	fullArgs = append(fullArgs, cliArgs...)
+	for _, arg := range args {
+		fullArgs = append(fullArgs, util.ExpandTilde(arg))
 	}
 
 	envEntries := make([]string, 0, len(env))
@@ -314,7 +301,7 @@ func (c *Config) ResolveRestic(profile, subcmd string, cliArgs []string) (*Resti
 		envEntries = append(envEntries, key+"="+util.ExpandTilde(env[key]))
 	}
 
-	return &ResticInvocation{Args: argv, Env: envEntries}, nil
+	return &ResticInvocation{Args: fullArgs, Env: envEntries}, nil
 }
 
 // flagToArgs turns one config flag key and value into restic argv tokens:
@@ -325,6 +312,7 @@ func flagToArgs(key string, value any) ([]string, error) {
 	if len(key) == 1 {
 		flag = "-" + key
 	}
+
 	switch typed := value.(type) {
 	case bool:
 		if typed {
@@ -361,6 +349,6 @@ func scalarString(value any) (string, error) {
 	case float64:
 		return strconv.FormatFloat(typed, 'f', -1, 64), nil
 	default:
-		return "", fmt.Errorf("expected a scalar, got %T", value)
+		return "", fmt.Errorf("expected a non-temporal scalar, got %T", value)
 	}
 }
